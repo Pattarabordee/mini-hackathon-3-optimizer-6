@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+
+# Test/cache artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Notebook and editor noise
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local Git initialization scratch directory
+.git-store/
+*.bundle.lock
+
+# Local/private data. Share these through an approved secure channel, not Git.
+employees.csv
+questions.csv
+train_labels.json
+FahMai Directory Q&A.pdf
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.xlsx
+*.xls
+
+# Competition outputs
+submission.csv
+my_submission.csv
