@@ -131,6 +131,8 @@ def deterministic_answer(analysis: dict[str, Any], evidence: dict[str, Any]) -> 
 
     row = rows[0]
     if columns:
+        if any(column in IDENTITY_COLUMNS for column in columns):
+            return format_name(row, language) or None
         parts = []
         for column in columns:
             value = str(row.get(column, "")).strip()
@@ -191,4 +193,3 @@ def write_submission(root: Path, answer_records: list[dict[str, Any]]) -> Path:
         for question in questions:
             writer.writerow({"id": question["id"], "response": answers_by_id.get(question["id"], "")})
     return output_path
-

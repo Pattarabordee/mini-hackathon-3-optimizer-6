@@ -16,6 +16,7 @@ FIELD_TO_COLUMNS = {
     "employee_id": ["Employee ID"],
     "id": ["Employee ID"],
     "name": ["First Name Thai", "Last Name Thai", "First Name English", "Last Name English"],
+    "person_name": ["First Name Thai", "Last Name Thai", "First Name English", "Last Name English"],
     "thai_name": ["First Name Thai", "Last Name Thai"],
     "english_name": ["First Name English", "Last Name English"],
     "nickname": ["Nickname Thai", "Nickname English"],
@@ -29,8 +30,13 @@ FIELD_TO_COLUMNS = {
     "location": ["Office Location"],
     "branch": ["Branch"],
     "email": ["Email Address"],
+    "contact": ["Email Address", "Phone Extension", "Mobile No."],
+    "contact_info": ["Email Address", "Phone Extension", "Mobile No."],
+    "contact_number": ["Phone Extension", "Mobile No."],
+    "phone_number": ["Phone Extension", "Mobile No."],
     "phone": ["Phone Extension"],
     "extension": ["Phone Extension"],
+    "contact_id": ["Phone Extension"],
     "mobile": ["Mobile No."],
     "start_year": ["Start Year"],
     "position_level": ["Position Level"],
@@ -205,19 +211,25 @@ def filter_dataframe(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.Dat
     candidates = df.copy()
     notes: list[str] = []
     confidence = 0.5
+    used_entity = False
 
     person_name = entities.get("person_name")
     if person_name:
+        used_entity = True
         person_matches = match_person_name(df, str(person_name))
         if not person_matches.empty:
             candidates = person_matches
             notes.append("Matched person_name.")
             confidence = 0.9 if len(candidates) == 1 else 0.75
         else:
+            fallback, fallback_note, fallback_confidence = fallback_match_from_question(df, analysis)
+            if not fallback.empty:
+                return fallback, f"No person_name match. {fallback_note}", fallback_confidence
             return df.iloc[0:0], "No person_name match.", 0.0
 
     nickname = entities.get("nickname")
     if nickname:
+        used_entity = True
         candidates = match_columns(candidates, str(nickname), ["Nickname Thai", "Nickname English"])
         notes.append("Filtered by nickname.")
         confidence = max(confidence, 0.75 if len(candidates) else 0.0)
@@ -226,6 +238,7 @@ def filter_dataframe(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.Dat
         value = entities.get(entity_key)
         if not value:
             continue
+        used_entity = True
         columns = [column]
         if entity_key == "position":
             columns = ["Position in English", "Position in Thai"]
@@ -233,10 +246,71 @@ def filter_dataframe(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.Dat
         notes.append(f"Filtered by {entity_key}.")
         confidence = max(confidence, 0.7 if len(candidates) else 0.0)
 
-    if not any(entities.get(key) for key in ["person_name", "nickname", *ENTITY_FIELD_TO_COLUMN.keys()]):
+    if not used_entity:
+        fallback, fallback_note, fallback_confidence = fallback_match_from_question(df, analysis)
+        if not fallback.empty:
+            return fallback, fallback_note, fallback_confidence
         return df.iloc[0:0], "No usable entities in question analysis.", 0.0
 
+    if candidates.empty:
+        fallback, fallback_note, fallback_confidence = fallback_match_from_question(df, analysis)
+        if not fallback.empty:
+            return fallback, f"Entity filters were empty. {fallback_note}", fallback_confidence
+
     return candidates, " ".join(notes), confidence
+
+
+def fallback_match_from_question(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.DataFrame, str, float]:
+    """Deterministic rescue pass using exact directory values found in the question text."""
+    question = normalize_text(analysis.get("question", ""))
+    if not question:
+        return df.iloc[0:0], "No question text for fallback retrieval.", 0.0
+
+    requires_group_result = bool(analysis.get("requires_count") or analysis.get("requires_list"))
+
+    full_english = (df["First Name English"].astype(str) + " " + df["Last Name English"].astype(str)).map(normalize_text)
+    full_thai = (df["First Name Thai"].astype(str) + " " + df["Last Name Thai"].astype(str)).map(normalize_text)
+    for label, values in [("full English name", full_english), ("full Thai name", full_thai)]:
+        mask = values.map(lambda value: bool(value) and len(value) >= 5 and value in question)
+        if mask.any():
+            return df[mask], f"Fallback matched {label} from question text.", 0.82
+
+    strong_columns = [
+        "Email Address",
+        "Phone Extension",
+        "Mobile No.",
+        "Unit",
+        "Section",
+        "Position in English",
+        "Position in Thai",
+        "Nickname English",
+        "Nickname Thai",
+    ]
+    for column in strong_columns:
+        matched = _match_question_against_column(df, question, column, min_len=3)
+        if not matched.empty:
+            return matched, f"Fallback matched `{column}` from question text.", 0.72
+
+    if requires_group_result:
+        for column in ["Department", "Branch", "Office Location", "Position Level", "Start Year"]:
+            matched = _match_question_against_column(df, question, column, min_len=2)
+            if not matched.empty:
+                return matched, f"Fallback matched group column `{column}` from question text.", 0.62
+
+    return df.iloc[0:0], "Fallback retrieval found no exact directory value in question text.", 0.0
+
+
+def _match_question_against_column(df: pd.DataFrame, question: str, column: str, min_len: int) -> pd.DataFrame:
+    if column not in df.columns:
+        return df.iloc[0:0]
+    values = df[column].astype(str).map(normalize_text)
+    unique_values = sorted({value for value in values if len(value) >= min_len}, key=len, reverse=True)
+    padded_question = f" {question} "
+    for value in unique_values:
+        padded_value = f" {value} "
+        if padded_value in padded_question or (len(value) >= 5 and value in question):
+            return df[values == value]
+    return df.iloc[0:0]
 
 
 def match_person_name(df: pd.DataFrame, query: str) -> pd.DataFrame:
@@ -285,4 +359,3 @@ def _all_blank(df: pd.DataFrame, column: str) -> bool:
 
 def rows_to_records(df: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
     return df.head(limit).fillna("").to_dict(orient="records")
-
