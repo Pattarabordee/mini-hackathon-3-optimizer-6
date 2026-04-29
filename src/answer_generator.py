@@ -137,10 +137,14 @@ def deterministic_answer(analysis: dict[str, Any], evidence: dict[str, Any]) -> 
         return None
 
     if analysis.get("requires_list") or status == "ambiguous" or len(rows) > 1:
-        names = [format_name(row, language) for row in rows if format_name(row, language)]
-        if not names:
+        if columns and not any(column in IDENTITY_COLUMNS for column in columns):
+            formatted_rows = [format_row_with_columns(row, columns, language) for row in rows]
+            formatted_rows = [row for row in formatted_rows if row]
+        else:
+            formatted_rows = [format_name(row, language) for row in rows if format_name(row, language)]
+        if not formatted_rows:
             return None
-        return "; ".join(names)
+        return "; ".join(formatted_rows)
 
     row = rows[0]
     if columns:
@@ -173,6 +177,22 @@ def language_preferred_columns(columns: list[str], language: str) -> list[str]:
         preferred.append(column)
     preferred.extend(columns)
     return list(dict.fromkeys(preferred))
+
+
+def format_row_with_columns(row: dict[str, Any], columns: list[str], language: str) -> str:
+    name = format_name(row, language)
+    values = []
+    for column in language_preferred_columns(columns, language):
+        value = str(row.get(column, "")).strip()
+        if value:
+            values.append(value)
+    values = list(dict.fromkeys(values))
+    if not values:
+        return name
+    value_text = ", ".join(values)
+    if name:
+        return f"{name}: {value_text}"
+    return value_text
 
 
 def format_name(row: dict[str, Any], language: str) -> str:

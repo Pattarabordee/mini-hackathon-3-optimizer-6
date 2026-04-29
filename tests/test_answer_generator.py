@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.answer_generator import generate_one
+from src.answer_generator import deterministic_answer, generate_one
 from src.config import AppConfig
 
 
@@ -36,3 +36,32 @@ def test_no_evidence_skips_typhoon_and_uses_language_fallback(tmp_path):
 
     assert record["source"] == "no_evidence_fallback"
     assert record["response"] == "ไม่พบข้อมูล"
+
+
+def test_ambiguous_field_answers_include_requested_values():
+    response = deterministic_answer(
+        {"id": "q2", "language": "en", "requires_list": False},
+        {
+            "retrieval_status": "ambiguous",
+            "matched_columns": ["Phone Extension"],
+            "matched_rows": [
+                {
+                    "First Name English": "Somchai",
+                    "Last Name English": "Jaidee",
+                    "First Name Thai": "",
+                    "Last Name Thai": "",
+                    "Phone Extension": "12345",
+                },
+                {
+                    "First Name English": "Jane",
+                    "Last Name English": "Finance",
+                    "First Name Thai": "",
+                    "Last Name Thai": "",
+                    "Phone Extension": "54321",
+                },
+            ],
+        },
+    )
+
+    assert "Somchai Jaidee: 12345" in response
+    assert "Jane Finance: 54321" in response

@@ -54,6 +54,28 @@ ENTITY_FIELD_TO_COLUMN = {
     "position": "Position in English",
 }
 
+LOOKUP_COLUMNS = [
+    "Employee ID",
+    "Email Address",
+    "Phone Extension",
+    "Mobile No.",
+    "First Name Thai",
+    "Last Name Thai",
+    "First Name English",
+    "Last Name English",
+    "Nickname Thai",
+    "Nickname English",
+    "Position in Thai",
+    "Position in English",
+    "Department",
+    "Section",
+    "Unit",
+    "Office Location",
+    "Branch",
+    "Start Year",
+    "Position Level",
+]
+
 REFUSAL_INTENTS = {
     "field_not_in_directory",
     "person_not_found",
@@ -242,12 +264,27 @@ def filter_dataframe(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.Dat
         if not value:
             continue
         used_entity = True
-        columns = [column]
         if entity_key == "position":
-            columns = ["Position in English", "Position in Thai"]
-        candidates = match_columns(candidates, str(value), columns)
+            candidates = match_position_entity(candidates, str(value))
+        else:
+            candidates = match_columns(candidates, str(value), [column])
         notes.append(f"Filtered by {entity_key}.")
         confidence = max(confidence, 0.7 if len(candidates) else 0.0)
+
+    other_values = normalize_other_entities(entities.get("other"))
+    if other_values:
+        other_matches, other_note, other_confidence = match_lookup_values(df, other_values)
+        if not other_matches.empty:
+            used_entity = True
+            if candidates.empty or not notes:
+                candidates = other_matches
+            elif analysis.get("requires_list") or len(other_values) > 1:
+                candidates = merge_rows(candidates, other_matches)
+            else:
+                narrowed = candidates[candidates.index.isin(other_matches.index)]
+                candidates = narrowed if not narrowed.empty else other_matches
+            notes.append(other_note)
+            confidence = max(confidence, other_confidence)
 
     if not used_entity:
         fallback, fallback_note, fallback_confidence = fallback_match_from_question(df, analysis)
@@ -260,16 +297,27 @@ def filter_dataframe(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.Dat
         if not fallback.empty:
             return fallback, f"Entity filters were empty. {fallback_note}", fallback_confidence
 
+    if analysis.get("requires_count") or analysis.get("requires_list"):
+        refined, refined_note, refined_confidence = fallback_group_match_from_question(df, analysis)
+        if not refined.empty and (candidates.empty or len(refined) < len(candidates)):
+            return refined, f"Refined broad group filter. {refined_note}", max(confidence, refined_confidence)
+
     return candidates, " ".join(notes), confidence
 
 
 def fallback_match_from_question(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.DataFrame, str, float]:
     """Deterministic rescue pass using exact directory values found in the question text."""
-    question = normalize_text(analysis.get("question", ""))
+    raw_question = str(analysis.get("question", ""))
+    question = normalize_text(raw_question)
     if not question:
         return df.iloc[0:0], "No question text for fallback retrieval.", 0.0
 
     requires_group_result = bool(analysis.get("requires_count") or analysis.get("requires_list"))
+    lookup_values = extract_lookup_values(raw_question)
+    if lookup_values:
+        matched, note, confidence = match_lookup_values(df, lookup_values)
+        if not matched.empty:
+            return matched, f"Fallback matched extracted lookup token. {note}", confidence
 
     full_english = (df["First Name English"].astype(str) + " " + df["Last Name English"].astype(str)).map(normalize_text)
     full_thai = (df["First Name Thai"].astype(str) + " " + df["Last Name Thai"].astype(str)).map(normalize_text)
@@ -301,6 +349,141 @@ def fallback_match_from_question(df: pd.DataFrame, analysis: dict[str, Any]) -> 
                 return matched, f"Fallback matched group column `{column}` from question text.", 0.62
 
     return df.iloc[0:0], "Fallback retrieval found no exact directory value in question text.", 0.0
+
+
+def fallback_group_match_from_question(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.DataFrame, str, float]:
+    question = normalize_text(analysis.get("question", ""))
+    if not question:
+        return df.iloc[0:0], "No question text for group refinement.", 0.0
+    for column in [
+        "Unit",
+        "Section",
+        "Department",
+        "Branch",
+        "Office Location",
+        "Position Level",
+        "Start Year",
+        "Position in English",
+        "Position in Thai",
+    ]:
+        matched = _match_question_against_column(df, question, column, min_len=2)
+        if not matched.empty:
+            return matched, f"Group refinement matched `{column}` from question text.", 0.66
+    return df.iloc[0:0], "Group refinement found no exact directory value in question text.", 0.0
+
+
+def normalize_other_entities(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    values = raw if isinstance(raw, list) else [raw]
+    normalized: list[str] = []
+    for value in values:
+        if isinstance(value, dict):
+            value = " ".join(str(item) for item in value.values() if item)
+        text = str(value or "").strip()
+        if text:
+            normalized.append(text)
+    return list(dict.fromkeys(normalized))
+
+
+def extract_lookup_values(raw_question: str) -> list[str]:
+    values: list[str] = []
+    values.extend(re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", raw_question, flags=re.IGNORECASE))
+
+    for candidate in re.findall(r"(?:\d[\s\-().]*){5,12}", raw_question):
+        digits = re.sub(r"\D", "", candidate)
+        if len(digits) in {5, 8, 9, 10}:
+            values.append(digits)
+
+    code_pattern = r"\b[A-Z]{2,}[A-Z0-9]{1,}(?:[-_][A-Z0-9]+)*\b|\b[A-Za-z]{2,}[A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)+\b"
+    stopwords = {
+        "AND",
+        "ARE",
+        "FOR",
+        "FROM",
+        "HOW",
+        "THE",
+        "WHAT",
+        "WHEN",
+        "WHERE",
+        "WHICH",
+        "WHO",
+        "WITH",
+    }
+    for token in re.findall(code_pattern, raw_question):
+        if token.upper() not in stopwords:
+            values.append(token)
+
+    return list(dict.fromkeys(value.strip() for value in values if value and value.strip()))
+
+
+def match_lookup_values(df: pd.DataFrame, values: list[str]) -> tuple[pd.DataFrame, str, float]:
+    frames: list[pd.DataFrame] = []
+    matched_columns: list[str] = []
+
+    for value in values:
+        person_matches = match_person_name(df, value)
+        if not person_matches.empty:
+            frames.append(person_matches)
+            matched_columns.extend(["First Name Thai", "Last Name Thai", "First Name English", "Last Name English"])
+
+        column_matches, columns = match_value_across_columns(df, value, LOOKUP_COLUMNS)
+        if not column_matches.empty:
+            frames.append(column_matches)
+            matched_columns.extend(columns)
+
+    if not frames:
+        return df.iloc[0:0], "Lookup values did not match directory columns.", 0.0
+
+    merged = frames[0]
+    for frame in frames[1:]:
+        merged = merge_rows(merged, frame)
+    columns = list(dict.fromkeys(matched_columns))
+    confidence = 0.86 if len(merged) <= max(len(values), 1) else 0.68
+    return merged, f"Matched lookup values against columns: {columns}.", confidence
+
+
+def match_value_across_columns(df: pd.DataFrame, value: str, columns: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    query_norm = normalize_text(value)
+    if not query_norm:
+        return df.iloc[0:0], []
+
+    query_digits = re.sub(r"\D", "", value)
+    exact_mask = pd.Series(False, index=df.index)
+    contains_mask = pd.Series(False, index=df.index)
+    matched_columns: list[str] = []
+
+    for column in columns:
+        if column not in df.columns:
+            continue
+        raw_values = df[column].astype(str)
+        normalized_values = raw_values.map(normalize_text)
+        column_exact = normalized_values == query_norm
+
+        if query_digits and column in {"Employee ID", "Phone Extension", "Mobile No."}:
+            digit_values = raw_values.map(lambda item: re.sub(r"\D", "", item))
+            column_exact = column_exact | (digit_values == query_digits)
+
+        if column_exact.any():
+            exact_mask = exact_mask | column_exact
+            matched_columns.append(column)
+            continue
+
+        if len(query_norm) >= 4:
+            column_contains = normalized_values.str.contains(re.escape(query_norm), regex=True, na=False)
+            if query_digits and column in {"Employee ID", "Phone Extension", "Mobile No."}:
+                digit_values = raw_values.map(lambda item: re.sub(r"\D", "", item))
+                column_contains = column_contains | digit_values.str.contains(re.escape(query_digits), regex=True, na=False)
+            if column_contains.any():
+                contains_mask = contains_mask | column_contains
+                matched_columns.append(column)
+
+    mask = exact_mask if exact_mask.any() else contains_mask
+    return df[mask], list(dict.fromkeys(matched_columns))
+
+
+def merge_rows(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+    return pd.concat([left, right]).loc[lambda frame: ~frame.index.duplicated(keep="first")]
 
 
 def _match_question_against_column(df: pd.DataFrame, question: str, column: str, min_len: int) -> pd.DataFrame:
@@ -338,6 +521,55 @@ def match_person_name(df: pd.DataFrame, query: str) -> pd.DataFrame:
         max,
     )
     return df[scores >= 92]
+
+
+def match_position_entity(df: pd.DataFrame, query: str) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for variant in position_query_variants(query):
+        title_matches = match_columns(df, variant, ["Position in English", "Position in Thai"])
+        if not title_matches.empty:
+            frames.append(title_matches)
+        code_matches, _ = match_value_across_columns(df, variant, ["Unit", "Section", "Department", "Position Level"])
+        if not code_matches.empty:
+            frames.append(code_matches)
+
+    if not frames:
+        return df.iloc[0:0]
+    merged = frames[0]
+    for frame in frames[1:]:
+        merged = merge_rows(merged, frame)
+    return merged
+
+
+def position_query_variants(query: str) -> list[str]:
+    expansions = {
+        "ceo": "chief executive officer",
+        "cfo": "chief financial officer",
+        "cto": "chief technology officer",
+        "coo": "chief operating officer",
+        "cmo": "chief marketing officer",
+        "cpo": "chief product officer",
+        "chro": "chief human resources officer",
+        "evp": "executive vice president",
+        "svp": "senior vice president",
+        "avp": "assistant vice president",
+        "vp": "vice president",
+        "ea": "executive assistant",
+        "secretary": "executive assistant",
+    }
+    normalized = normalize_text(query)
+    variants = [query, normalized]
+    tokens = normalized.split()
+    expanded_tokens = [expansions.get(token, token) for token in tokens]
+    expanded = " ".join(expanded_tokens).strip()
+    if expanded and expanded != normalized:
+        variants.append(expanded)
+
+    compact = re.sub(r"[^A-Za-z0-9]+", "", query)
+    if compact and compact.casefold() in expansions:
+        variants.append(expansions[compact.casefold()])
+
+    return list(dict.fromkeys(value for value in variants if value))
 
 
 def match_columns(df: pd.DataFrame, query: str, columns: list[str]) -> pd.DataFrame:
