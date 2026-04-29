@@ -1,66 +1,129 @@
-# FahMai Directory Q&A — Competition Files
+# FahMai Directory Q&A Harness
 
-## Quick start
+Typhoon v2.5 local harness for FahMai Directory Q&A Minihack with deterministic retrieval, validation, caching, and pre-submit grading.
 
-1. Build your RAG / tool-use system that reads `employees.csv` and answers `questions.csv`
-2. Output a `submission.csv` with columns `id,response`
-3. Grade locally: `python grade.py submission.csv train_labels.json`
-4. Submit `submission.csv` to Kaggle
+This repository is the Team Optimizer_6 workspace for Mini Hackathon 3. It builds a local harness around the required Typhoon model, validates submissions before Kaggle upload, and keeps sensitive directory data out of Git.
 
-## Files
+## Competition Constraints
 
-| File | Description |
-|---|---|
-| `data/employees.csv` | Employee directory (1,995 rows, 19 columns). Source of truth. |
-| `data/questions.csv` | 300 questions (`id`, `language`, `question`). |
-| `sample_submission.csv` | Submission template — 300 rows of `id,response`. |
-| `train_labels.json` | Ground truth for 158 public-split items. Use for local grading. |
-| `grade.py` | Local grader. Scores your submission against `train_labels.json`. |
+- LLM-based question analysis and answer generation must use only `typhoon-v2.5-30b-a3b-instruct`.
+- Do not use GPT, Claude, Gemini, NotebookLM, Codex reasoning, or any other LLM to analyze real questions or generate final answers.
+- Codex may write and maintain the harness code only.
+- Do not submit to Kaggle automatically.
+- Cache every Typhoon call.
+- Keep refusal phrases exact.
 
-## Local grading
+## Required Local Files
 
-```bash
-python grade.py my_submission.csv train_labels.json
+These files must exist in the project root:
+
+- `employees.csv`
+- `questions.csv`
+- `sample_submission.csv`
+- `train_labels.json`
+- `grade.py`
+
+The raw CSV/JSON/PDF data files are ignored by Git and must be shared through an approved secure channel.
+
+## Setup
+
+```powershell
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+Edit `.env`:
+
+```text
+TYPHOON_API_KEY=
+TYPHOON_BASE_URL=https://api.opentyphoon.ai/v1
+TYPHOON_MODEL=typhoon-v2.5-30b-a3b-instruct
+MOCK_TYPHOON=false
+TYPHOON_TIMEOUT_SECONDS=60
+TYPHOON_MAX_RETRIES=2
+```
+
+If `TYPHOON_API_KEY` is empty or `MOCK_TYPHOON=true`, the harness runs in mock mode. Mock mode is for testing the software pipeline only and does not create real competition answers.
+
+## Run Full Pipeline
+
+```powershell
+python -m src.run_pipeline
+```
+
+Workflow:
+
+1. Check required files
+2. Profile `employees.csv`
+3. Analyze questions with Typhoon and cache to `cache/question_analysis.jsonl`
+4. Retrieve deterministic evidence to `outputs/evidence.jsonl`
+5. Generate answers to `cache/generated_answers.jsonl`
+6. Write `outputs/submission.csv`
+7. Validate submission
+8. Run local grading with `grade.py`
+9. Write reports
+
+## Validation Only
+
+```powershell
+python -m src.run_pipeline --validate-only
 ```
 
 Output:
-```
-Scored 158 items against train_labels.json
-Passed: 94/158 = 59.5%
 
-Bucket                             pass/total    rate
---------------------------------------------------------
-nickname_grid                    12/      17   70.6%
-refuse                           11/      15   73.3%
-...
-```
+- `outputs/validation_report.json`
 
-The per-bucket breakdown shows which question types your system handles well vs. poorly.
-
-## Sensitive data policy
-
-Raw directory data and labels are local-only and must not be pushed to Git.
-The repository ignore list blocks `employees.csv`, `questions.csv`,
-`train_labels.json`, `FahMai Directory Q&A.pdf`, and `data/`.
-
-Before pushing, run:
+## Local Grading Only
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\safe-push.ps1 <remote> main
+python -m src.run_pipeline --grade-only
 ```
 
-The safe-push script scans tracked files and blocks protected data paths or
-likely secrets before it runs `git push`.
+Equivalent grading command:
 
-## Submission format
-
-```csv
-id,response
-g001,The RETVP is Wiriya Chanchai (วิริยะ จันทชัย)
-g002,OPSVP คือ คึกฤทธิ์ บุษราคัมวงศ์
-...
+```powershell
+python grade.py outputs/submission.csv train_labels.json
 ```
 
-- 300 rows, UTF-8 encoding
-- Thai questions require Thai answers; English questions require English answers
-- See `description.md` for refusal phrases and detailed evaluation rules
+## Reports
+
+- `reports/data_profile.md`: technical profile with sensitive sample values redacted
+- `reports/run_report.md`: pipeline run summary, validator status, grading output
+- `reports/error_analysis.md`: public-label failure categories and recommended fixes
+- `reports/missing_files.md`: generated only when required inputs are missing
+
+## Tests
+
+```powershell
+pytest
+```
+
+## Before Kaggle Submission
+
+Submit only after:
+
+- `outputs/submission.csv` exists with exactly 300 rows and columns `id,response`
+- Validator status is `pass` or has no critical errors
+- Local public score is high enough for the team threshold
+- Refusal phrase checks pass 100%
+- There are no empty responses
+- There are no critical wrong-language issues
+- There is no leakage in refusal responses
+- A human reviewer has inspected `reports/error_analysis.md`
+
+## Safety Rules
+
+- Never commit `.env`, API keys, Kaggle tokens, raw credentials, or generated submissions that have not been reviewed.
+- Raw data files such as `employees.csv`, `questions.csv`, `train_labels.json`, and `FahMai Directory Q&A.pdf` stay local.
+- Use `scripts/safe-push.ps1` when pushing to GitHub:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\safe-push.ps1 origin main:main
+```
+
+## Known Limitations
+
+- Mock mode validates the harness only; it cannot produce competition-grade answers.
+- Deterministic retrieval depends on Typhoon question analysis quality.
+- Public labels cover only part of the competition set, so avoid overfitting fixes to public failed ids.
+

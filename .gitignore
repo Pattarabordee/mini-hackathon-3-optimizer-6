@@ -31,6 +31,11 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+cache/*.jsonl
+cache/*.json
+outputs/*.csv
+outputs/*.json
+reports/*.md
 
 # Notebook and editor noise
 .ipynb_checkpoints/
