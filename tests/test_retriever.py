@@ -136,6 +136,22 @@ def test_retriever_refines_group_counts_from_question_text():
     assert evidence["computed_value"] == 1
 
 
+def test_retriever_matches_camel_case_org_name_to_code():
+    analysis = {
+        "id": "t007",
+        "intent": "list_employees",
+        "entities": {"other": ["TechCrew"]},
+        "target_fields": ["name"],
+        "requires_count": False,
+        "requires_list": True,
+    }
+    df = _df().copy()
+    df.loc[0, "Department"] = "TC"
+    evidence = retrieve_one(df, analysis)
+    assert evidence["retrieval_status"] == "found"
+    assert evidence["matched_rows"][0]["Department"] == "TC"
+
+
 def test_retriever_extracts_lookup_tokens_from_question_text():
     analysis = {
         "id": "t004",

@@ -414,6 +414,8 @@ def extract_lookup_values(raw_question: str) -> list[str]:
         if token.upper() not in stopwords:
             values.append(token)
 
+    values.extend(re.findall(r"\b[A-Z]?[a-z]+(?:[A-Z][a-z]+)+\b", raw_question))
+
     return list(dict.fromkeys(value.strip() for value in values if value and value.strip()))
 
 
@@ -444,8 +446,8 @@ def match_lookup_values(df: pd.DataFrame, values: list[str]) -> tuple[pd.DataFra
 
 
 def match_value_across_columns(df: pd.DataFrame, value: str, columns: list[str]) -> tuple[pd.DataFrame, list[str]]:
-    query_norm = normalize_text(value)
-    if not query_norm:
+    variants = lookup_value_variants(value)
+    if not variants:
         return df.iloc[0:0], []
 
     query_digits = re.sub(r"\D", "", value)
@@ -458,7 +460,9 @@ def match_value_across_columns(df: pd.DataFrame, value: str, columns: list[str])
             continue
         raw_values = df[column].astype(str)
         normalized_values = raw_values.map(normalize_text)
-        column_exact = normalized_values == query_norm
+        column_exact = pd.Series(False, index=df.index)
+        for variant in variants:
+            column_exact = column_exact | (normalized_values == variant)
 
         if query_digits and column in {"Employee ID", "Phone Extension", "Mobile No."}:
             digit_values = raw_values.map(lambda item: re.sub(r"\D", "", item))
@@ -469,8 +473,11 @@ def match_value_across_columns(df: pd.DataFrame, value: str, columns: list[str])
             matched_columns.append(column)
             continue
 
-        if len(query_norm) >= 4:
-            column_contains = normalized_values.str.contains(re.escape(query_norm), regex=True, na=False)
+        contain_variants = [variant for variant in variants if len(variant) >= 4]
+        if contain_variants:
+            column_contains = pd.Series(False, index=df.index)
+            for variant in contain_variants:
+                column_contains = column_contains | normalized_values.str.contains(re.escape(variant), regex=True, na=False)
             if query_digits and column in {"Employee ID", "Phone Extension", "Mobile No."}:
                 digit_values = raw_values.map(lambda item: re.sub(r"\D", "", item))
                 column_contains = column_contains | digit_values.str.contains(re.escape(query_digits), regex=True, na=False)
@@ -480,6 +487,26 @@ def match_value_across_columns(df: pd.DataFrame, value: str, columns: list[str])
 
     mask = exact_mask if exact_mask.any() else contains_mask
     return df[mask], list(dict.fromkeys(matched_columns))
+
+
+def lookup_value_variants(value: str) -> list[str]:
+    text = str(value or "").strip()
+    normalized = normalize_text(text)
+    variants = [normalized]
+
+    compact = re.sub(r"[^A-Za-z0-9]+", "", text)
+    if compact:
+        variants.append(normalize_text(compact))
+
+    camel_parts = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|\d+", text)
+    if len(camel_parts) > 1:
+        variants.append("".join(part[0] for part in camel_parts if part).casefold())
+
+    words = normalized.split()
+    if len(words) > 1:
+        variants.append("".join(word[0] for word in words if word))
+
+    return list(dict.fromkeys(variant for variant in variants if variant))
 
 
 def merge_rows(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
