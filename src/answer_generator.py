@@ -9,7 +9,7 @@ from .config import AppConfig
 from .jsonl_utils import read_jsonl, write_jsonl
 from .load_data import read_questions
 from .question_router import parse_json_object
-from .refusal_guard import apply_refusal, refusal_phrase
+from .refusal_guard import apply_refusal
 from .typhoon_client import TyphoonClient
 
 
@@ -72,15 +72,6 @@ def generate_one(config: AppConfig, client: TyphoonClient, analysis: dict[str, A
             "source": "deterministic",
             "mock": False,
             "generation_notes": "Formatted directly from evidence.",
-        }
-
-    if evidence.get("retrieval_status") in {"not_found", "error"} or not evidence.get("matched_rows"):
-        return {
-            "id": analysis["id"],
-            "response": refusal_phrase(analysis.get("language", "en"), "person_not_found"),
-            "source": "deterministic_no_evidence",
-            "mock": False,
-            "generation_notes": "No evidence available; refused to guess outside evidence.",
         }
 
     result = client.chat(_answer_messages(analysis, evidence), temperature=0.0)
