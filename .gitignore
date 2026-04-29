@@ -35,6 +35,7 @@ cache/*.jsonl
 cache/*.json
 outputs/*.csv
 outputs/*.json
+outputs/*.jsonl
 reports/*.md
 
 # Notebook and editor noise
