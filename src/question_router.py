@@ -151,16 +151,23 @@ def _analysis_messages(question: dict[str, str], attempt: int) -> list[dict[str,
     user = (
         "Return exactly one JSON object with keys: id, language, question, intent, entities, "
         "target_fields, needs_refusal, refusal_type, requires_count, requires_list, "
-        "requires_exact_count, notes. "
+        "requires_exact_count, filters, notes. "
         "Entities must contain person_name, nickname, position, department, section, unit, "
         "office, branch, field, other. Use null when unknown and [] for empty other. "
+        "Filters must be a list of objects with keys field and value. Use filters for values "
+        "that locate employee rows; use target_fields only for values requested in the answer. "
         "Use target_fields only from the allowed target_fields list. "
         "Map generic contact wording to specific fields: contact/contact_info -> email, "
         "phone_extension, mobile; contact_number/phone_number/extension -> phone_extension; "
         "person_name/full_name -> name; office_location/location -> office. "
         "For reverse lookup by email, phone extension, or mobile number, put the lookup value "
-        "in entities.other and set target_fields to ['name']; do not mark it as refusal. "
+        "in filters with field email, phone_extension, or mobile, and set target_fields to ['name']; "
+        "do not mark it as refusal. "
+        "For direct lookup such as asking email/mobile/extension of a person, put the person "
+        "or nickname in filters and put the requested contact field in target_fields. "
         "For identity questions like 'who is X' or role/code lookup, set target_fields to ['name']. "
+        "For role/code lookup, put the role/code text in filters using field position, unit, "
+        "department, section, branch, or office as appropriate. "
         "For nickname questions, set target_fields to ['nickname']. "
         "Set requires_count true only for count/how-many questions. "
         "Set requires_list true when the answer should include multiple employees. "
@@ -217,6 +224,7 @@ def normalize_analysis(question: dict[str, str], raw: dict[str, Any], error: str
         "requires_count": bool(raw.get("requires_count", False)),
         "requires_list": bool(raw.get("requires_list", False)),
         "requires_exact_count": bool(raw.get("requires_exact_count", False)),
+        "filters": normalize_filters(raw.get("filters")),
         "notes": (raw.get("notes") or "") + (f" | {error}" if error else ""),
         "analysis_error": error,
     }
@@ -238,3 +246,18 @@ def normalize_target_fields(raw_fields: Any) -> list[str]:
         else:
             fields.append(key)
     return list(dict.fromkeys(fields))
+
+
+def normalize_filters(raw_filters: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_filters, list):
+        return []
+    filters: list[dict[str, str]] = []
+    for item in raw_filters:
+        if not isinstance(item, dict):
+            continue
+        field = normalize_target_fields([item.get("field")])
+        value = str(item.get("value") or "").strip()
+        if not field or not value:
+            continue
+        filters.append({"field": field[0], "value": value})
+    return filters

@@ -216,10 +216,17 @@ def filter_dataframe(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.Dat
     confidence = 0.5
     used_entity = False
 
+    filtered_by_schema, filter_notes, filter_confidence = apply_schema_filters(df, analysis.get("filters") or [])
+    if filter_notes:
+        candidates = filtered_by_schema
+        notes.append(filter_notes)
+        confidence = filter_confidence
+        used_entity = True
+
     person_name = entities.get("person_name")
     if person_name:
         used_entity = True
-        person_matches = match_person_name(df, str(person_name))
+        person_matches = match_person_name(candidates if not candidates.empty else df, str(person_name))
         if not person_matches.empty:
             candidates = person_matches
             notes.append("Matched person_name.")
@@ -260,6 +267,30 @@ def filter_dataframe(df: pd.DataFrame, analysis: dict[str, Any]) -> tuple[pd.Dat
         if not fallback.empty:
             return fallback, f"Entity filters were empty. {fallback_note}", fallback_confidence
 
+    return candidates, " ".join(notes), confidence
+
+
+def apply_schema_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> tuple[pd.DataFrame, str, float]:
+    candidates = df.copy()
+    notes: list[str] = []
+    confidence = 0.0
+    for item in filters:
+        field = str(item.get("field") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not field or not value:
+            continue
+        if field in {"name", "thai_name", "english_name"}:
+            matched = match_person_name(candidates, value)
+        else:
+            columns = FIELD_TO_COLUMNS.get(field, [])
+            matched = match_columns(candidates, value, columns)
+        if matched.empty:
+            continue
+        candidates = matched
+        notes.append(f"Applied filter {field}.")
+        confidence = max(confidence, 0.78 if len(candidates) == 1 else 0.68)
+    if not notes:
+        return df.iloc[0:0], "", 0.0
     return candidates, " ".join(notes), confidence
 
 
