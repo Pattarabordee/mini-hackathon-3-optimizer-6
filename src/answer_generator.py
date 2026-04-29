@@ -74,6 +74,16 @@ def generate_one(config: AppConfig, client: TyphoonClient, analysis: dict[str, A
             "generation_notes": "Formatted directly from evidence.",
         }
 
+    no_evidence = evidence.get("retrieval_status") in {None, "not_found", "error"}
+    if no_evidence:
+        return {
+            "id": analysis["id"],
+            "response": fallback_answer(config, analysis),
+            "source": "no_evidence_fallback",
+            "mock": config.use_mock_typhoon,
+            "generation_notes": "Skipped Typhoon answer generation because retrieval returned no usable evidence.",
+        }
+
     result = client.chat(_answer_messages(analysis, evidence), temperature=0.0)
     if result.ok:
         try:
@@ -90,21 +100,24 @@ def generate_one(config: AppConfig, client: TyphoonClient, analysis: dict[str, A
                 "generation_notes": "Generated from limited evidence by Typhoon-compatible client.",
             }
 
-    language = analysis.get("language", "en")
-    fallback = (
-        "MOCK_TYPHOON: ไม่ใช่คำตอบจริงจาก Typhoon"
-        if config.use_mock_typhoon and language == "th"
-        else "MOCK_TYPHOON: not a real Typhoon answer"
-        if config.use_mock_typhoon
-        else "no record found"
-    )
     return {
         "id": analysis["id"],
-        "response": fallback,
+        "response": fallback_answer(config, analysis),
         "source": "fallback",
         "mock": config.use_mock_typhoon,
         "generation_notes": result.error if not result.ok else "No non-empty Typhoon response.",
     }
+
+
+def fallback_answer(config: AppConfig, analysis: dict[str, Any]) -> str:
+    language = analysis.get("language", "en")
+    if config.use_mock_typhoon:
+        if language == "th":
+            return "MOCK_TYPHOON: ไม่ใช่คำตอบจริงจาก Typhoon"
+        return "MOCK_TYPHOON: not a real Typhoon answer"
+    if language == "th":
+        return "ไม่พบข้อมูล"
+    return "no record found"
 
 
 def deterministic_answer(analysis: dict[str, Any], evidence: dict[str, Any]) -> str | None:
